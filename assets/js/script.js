@@ -110,7 +110,7 @@ function verificarDuplicatasEAN(codigosBarras) {
 
 // Função para abreviar nomes longos
 function abreviarNome(nome) {
-    const limite = 15;
+    const limite = 20;
     if (nome.length > limite) {
         return nome.substring(0, limite - 3) + '...';
     }
