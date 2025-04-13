@@ -106,6 +106,41 @@ input[type="text"]:focus, input[type="file"]:focus {
     background: #C0392B;
 }
 
+/* Estilos para códigos de barras no lightbox de edição */
+#editCodigosBarras .codigo-barra-item {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+    align-items: center;
+}
+
+#editCodigosBarras .codigo-barra-item input {
+    flex: 1;
+    min-width: 100px;
+    padding: 10px;
+    border: 1px solid #DDE2E6;
+    border-radius: 8px;
+    background: #F9FAFB;
+    font-size: 14px;
+    font-weight: 400;
+}
+
+#editCodigosBarras .codigo-barra-item button.remover {
+    padding: 10px 15px;
+    background: #E74C3C;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#editCodigosBarras .codigo-barra-item button.remover:hover {
+    background: #C0392B;
+}
+
 #etiquetas {
     max-height: 840px;
     overflow-y: auto;
@@ -494,6 +529,16 @@ input[type="text"]:focus, input[type="file"]:focus {
     .dimension-inputs, #codigosBarras .codigo-barra-item {
         flex-direction: column;
         gap: 10px;
+    }
+
+    #editCodigosBarras .codigo-barra-item {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    #editCodigosBarras .codigo-barra-item input,
+    #editCodigosBarras .codigo-barra-item button.remover {
+        width: 100%;
     }
 
     #etiquetas .etiqueta-item .primeira-linha {

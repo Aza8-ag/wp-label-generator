@@ -110,7 +110,7 @@ function verificarDuplicatasEAN(codigosBarras) {
 
 // Função para abreviar nomes longos
 function abreviarNome(nome) {
-    const limite = 20;
+    const limite = 10;
     if (nome.length > limite) {
         return nome.substring(0, limite - 3) + '...';
     }
@@ -485,10 +485,10 @@ function editarEtiqueta(index) {
         const div = document.createElement('div');
         div.className = 'codigo-barra-item';
         div.innerHTML = `
-            <input type="text" class="ref" value="${codigo.ref}">
-            <input type="text" class="cor" value="${codigo.cor}">
-            <input type="text" class="ean" value="${codigo.ean}">
-            <button type="button" onclick="removerCodigoBarra(this)">Remover</button>
+            <input type="text" class="ref" value="${codigo.ref}" placeholder="Ref">
+            <input type="text" class="cor" value="${codigo.cor}" placeholder="Cor">
+            <input type="text" class="ean" value="${codigo.ean}" placeholder="EAN 13">
+            <button type="button" class="remover" onclick="removerCodigoBarra(this)">Remover</button>
         `;
         codigosContainer.appendChild(div);
     });
