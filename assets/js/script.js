@@ -1,12 +1,22 @@
-const { jsPDF } = window.jspdf;
 let etiquetas = JSON.parse(localStorage.getItem('etiquetas')) || [];
 let indiceEdicao = -1;
+let confirmCallback = null;
 
-// Função para exibir notificações
-function showNotification(message, type = 'info') {
-    const container = document.getElementById('notification-container') || createNotificationContainer();
+// Lista de mensagens que usam notificação flutuante
+const toastMessages = [
+    'Etiqueta criada com sucesso!',
+    'Etiqueta excluída com sucesso!',
+    'Etiqueta editada com sucesso!',
+    'Todas as etiquetas foram limpas!',
+    'Não há etiquetas para limpar!',
+    'Etiquetas exportadas com sucesso!'
+];
+
+// Função para exibir notificações flutuantes
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toastContainer');
     const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
+    notification.className = `toast-notification ${type}`;
     notification.setAttribute('role', 'alert');
     notification.innerHTML = `
         <span>${message}</span>
@@ -15,46 +25,106 @@ function showNotification(message, type = 'info') {
     container.appendChild(notification);
 
     notification.querySelector('.close-btn').addEventListener('click', () => {
-        notification.remove();
+        notification.style.animation = 'fadeOut 0.3s forwards';
+        setTimeout(() => notification.remove(), 300);
     });
 
     setTimeout(() => {
-        notification.style.opacity = '0';
+        notification.style.animation = 'fadeOut 0.3s forwards';
         setTimeout(() => notification.remove(), 300);
     }, 5000);
 }
 
-// Função auxiliar para criar o contêiner de notificações
-function createNotificationContainer() {
-    const container = document.createElement('div');
-    container.id = 'notification-container';
-    container.className = 'notification-container';
-    document.body.appendChild(container);
-    return container;
+// Função para exibir notificações como lightbox
+function showNotification(message, type = 'info', callback = null) {
+    if (toastMessages.includes(message) || message.includes('Foram adicionadas')) {
+        showToast(message, type);
+        return;
+    }
+
+    const lightbox = document.getElementById('confirmLightbox');
+    const content = lightbox.querySelector('.notification-content');
+    const messageElement = lightbox.querySelector('.notification-message');
+    const actions = lightbox.querySelector('.notification-actions');
+
+    content.className = 'notification-content';
+    content.classList.add(type);
+    messageElement.textContent = message;
+
+    actions.innerHTML = '';
+    if (type === 'confirm') {
+        actions.innerHTML = `
+            <button onclick="confirmNotification(true)">Sim</button>
+            <button class="cancel" onclick="confirmNotification(false)">Não</button>
+        `;
+        confirmCallback = callback;
+    } else {
+        actions.innerHTML = `<button onclick="closeNotification()">Fechar</button>`;
+    }
+
+    lightbox.style.display = 'flex';
+}
+
+// Função para fechar notificação lightbox
+function closeNotification() {
+    const lightbox = document.getElementById('confirmLightbox');
+    lightbox.style.display = 'none';
+    confirmCallback = null;
+}
+
+// Função para lidar com confirmações
+function confirmNotification(result) {
+    const callback = confirmCallback;
+    closeNotification();
+    if (callback) {
+        callback(result);
+    }
 }
 
 // Função para validar EAN-13
 function validarEAN13(ean) {
-    if (!ean || ean.length !== 13 || !/^\d{13}$/.test(ean)) return false;
+    if (!ean || ean.length !== 13 || !/^\d{13}$/.test(ean)) {
+        return { valid: false, error: 'EAN-13 deve ter exatamente 13 dígitos numéricos.' };
+    }
     const digits = ean.split('').map(Number);
     const checkDigit = digits.pop();
     const sum = digits.reduce((acc, digit, index) => {
         return acc + (index % 2 === 0 ? digit : digit * 3);
     }, 0);
     const calculatedCheckDigit = (10 - (sum % 10)) % 10;
-    return calculatedCheckDigit === checkDigit;
+    if (calculatedCheckDigit !== checkDigit) {
+        return { valid: false, error: 'Dígito verificador do EAN-13 inválido.' };
+    }
+    return { valid: true };
+}
+
+// Função para verificar duplicatas de EAN-13
+function verificarDuplicatasEAN(codigosBarras) {
+    const eans = codigosBarras.map(item => item.ean).filter(ean => ean);
+    const duplicates = eans.filter((item, index) => eans.indexOf(item) !== index);
+    if (duplicates.length > 0) {
+        return { valid: false, error: `EAN-13 duplicado encontrado: ${duplicates.join(', ')}` };
+    }
+    return { valid: true };
 }
 
 // Função para abreviar nomes longos
 function abreviarNome(nome) {
-    const limite = 20;
+    const limite = 15;
     if (nome.length > limite) {
         return nome.substring(0, limite - 3) + '...';
     }
     return nome;
 }
 
-function adicionarEtiquetaIndividual() {
+function adicionarEtiquetaIndividual(event) {
+    if (event) event.preventDefault();
+    const nonce = document.getElementById('label-generator-nonce')?.dataset.nonce;
+    if (!nonce || !wp_verify_nonce(nonce, 'label_generator_nonce')) {
+        showNotification('Falha na verificação de segurança.', 'error');
+        return;
+    }
+
     const nome = document.getElementById('nome').value || "Sem Nome";
     const quantidade = document.getElementById('quantidade').value || "1 Pç.";
     const peso = document.getElementById('peso').value || "12kg";
@@ -71,22 +141,29 @@ function adicionarEtiquetaIndividual() {
     const foto = fotoInput.files[0] ? URL.createObjectURL(fotoInput.files[0]) : null;
 
     const codigosBarras = [];
-    let hasInvalidEAN = false;
     document.querySelectorAll('#codigosBarras .codigo-barra-item').forEach(item => {
         const ref = item.querySelector('.ref').value;
         const cor = item.querySelector('.cor').value;
         const ean = item.querySelector('.ean').value;
         if (ref || cor || ean) {
-            if (ean && !validarEAN13(ean)) {
-                hasInvalidEAN = true;
-            }
             codigosBarras.push({ ref, cor, ean });
         }
     });
 
-    if (hasInvalidEAN) {
-        showNotification('Um ou mais códigos EAN-13 estão inválidos!', 'error');
+    const duplicataCheck = verificarDuplicatasEAN(codigosBarras);
+    if (!duplicataCheck.valid) {
+        showNotification(duplicataCheck.error, 'error');
         return;
+    }
+
+    for (const codigo of codigosBarras) {
+        if (codigo.ean) {
+            const validacao = validarEAN13(codigo.ean);
+            if (!validacao.valid) {
+                showNotification(validacao.error, 'error');
+                return;
+            }
+        }
     }
 
     etiquetas.push({
@@ -122,11 +199,12 @@ function limparCamposIndividual() {
             <input type="text" class="cor" placeholder="Cor">
             <input type="text" class="ean" placeholder="EAN 13">
         </div>
-        <button onclick="adicionarCodigoBarra()">Adicionar Código</button>
+        <button type="button" onclick="adicionarCodigoBarra()">Adicionar Código</button>
     `;
 }
 
-function adicionarCodigoBarra() {
+function adicionarCodigoBarra(event) {
+    if (event) event.preventDefault();
     const container = document.getElementById('codigosBarras');
     const itens = container.querySelectorAll('.codigo-barra-item');
     if (itens.length < 6) {
@@ -136,7 +214,7 @@ function adicionarCodigoBarra() {
             <input type="text" class="ref" placeholder="Ref">
             <input type="text" class="cor" placeholder="Cor">
             <input type="text" class="ean" placeholder="EAN 13">
-            <button onclick="removerCodigoBarra(this)">Remover</button>
+            <button type="button" onclick="removerCodigoBarra(this)">Remover</button>
         `;
         container.insertBefore(novoItem, container.lastElementChild);
     } else {
@@ -148,7 +226,8 @@ function removerCodigoBarra(botao) {
     botao.parentElement.remove();
 }
 
-function adicionarCodigoBarraEdicao() {
+function adicionarCodigoBarraEdicao(event) {
+    if (event) event.preventDefault();
     const container = document.getElementById('editCodigosBarras');
     const itens = container.querySelectorAll('.codigo-barra-item');
     if (itens.length < 6) {
@@ -158,7 +237,7 @@ function adicionarCodigoBarraEdicao() {
             <input type="text" class="ref" placeholder="Ref">
             <input type="text" class="cor" placeholder="Cor">
             <input type="text" class="ean" placeholder="EAN 13">
-            <button onclick="removerCodigoBarra(this)">Remover</button>
+            <button type="button" onclick="removerCodigoBarra(this)">Remover</button>
         `;
         container.appendChild(novoItem);
     } else {
@@ -175,7 +254,14 @@ function fecharJsonLightbox() {
     document.getElementById('jsonLightbox').style.display = 'none';
 }
 
-function adicionarEtiquetasLote() {
+function adicionarEtiquetasLote(event) {
+    if (event) event.preventDefault();
+    const nonce = document.getElementById('label-generator-nonce')?.dataset.nonce;
+    if (!nonce || !wp_verify_nonce(nonce, 'label_generator_nonce')) {
+        showNotification('Falha na verificação de segurança.', 'error');
+        return;
+    }
+
     const excelInput = document.getElementById('excelInput');
     const file = excelInput.files[0];
     if (!file) {
@@ -243,11 +329,21 @@ function adicionarEtiquetasLote() {
                     }
                 }
 
-                codigosBarras.forEach((codigo, idx) => {
-                    if (codigo.ean && !validarEAN13(codigo.ean)) {
-                        showNotification(`EAN inválido na linha ${rowIndex + 2}, código ${idx + 1}: ${codigo.ean}`, 'warning');
+                const duplicataCheck = verificarDuplicatasEAN(codigosBarras);
+                if (!duplicataCheck.valid) {
+                    showNotification(duplicataCheck.error, 'error');
+                    return null;
+                }
+
+                for (const codigo of codigosBarras) {
+                    if (codigo.ean) {
+                        const validacao = validarEAN13(codigo.ean);
+                        if (!validacao.valid) {
+                            showNotification(`Linha ${rowIndex + 2}: ${validacao.error}`, 'warning');
+                            return null;
+                        }
                     }
-                });
+                }
 
                 return {
                     nome: row[0] ? String(row[0]) : 'Sem Nome',
@@ -297,6 +393,10 @@ function atualizarLista() {
         const div = document.createElement('div');
         div.className = 'etiqueta-item';
 
+        // Primeira linha: Nome (limitado a 10 caracteres) - Ref e flag
+        const primeiraLinha = document.createElement('div');
+        primeiraLinha.className = 'primeira-linha';
+
         const nomeContainer = document.createElement('div');
         nomeContainer.className = 'nome-container';
         const ref = etiqueta.codigosBarras.length > 0 ? etiqueta.codigosBarras[0].ref : 'N/A';
@@ -304,43 +404,45 @@ function atualizarLista() {
         nomeSpan.className = 'nome';
         nomeSpan.textContent = `${abreviarNome(etiqueta.nome)} - Ref: ${ref}`;
         nomeContainer.appendChild(nomeSpan);
+        primeiraLinha.appendChild(nomeContainer);
 
         const flag = document.createElement('span');
         flag.className = 'flag';
         flag.classList.add(etiqueta.foto ? 'com-imagem' : 'sem-imagem');
         flag.textContent = etiqueta.foto ? 'Com Imagem' : 'Sem Imagem';
-        nomeContainer.appendChild(flag);
+        primeiraLinha.appendChild(flag);
 
-        div.appendChild(nomeContainer);
+        div.appendChild(primeiraLinha);
 
-        const botoesContainer = document.createElement('div');
-        botoesContainer.className = 'botoes-container';
+        // Segunda linha: Botões (Editar, Visualizar, Excluir, Gerar PDF)
+        const segundaLinha = document.createElement('div');
+        segundaLinha.className = 'segunda-linha';
 
         const btnEditar = document.createElement('button');
         btnEditar.className = 'editar';
         btnEditar.textContent = 'Editar';
         btnEditar.onclick = () => editarEtiqueta(index);
-        botoesContainer.appendChild(btnEditar);
-
-        const btnExcluir = document.createElement('button');
-        btnExcluir.className = 'excluir';
-        btnExcluir.textContent = 'Excluir';
-        btnExcluir.onclick = () => excluirEtiqueta(index);
-        botoesContainer.appendChild(btnExcluir);
+        segundaLinha.appendChild(btnEditar);
 
         const btnVisualizar = document.createElement('button');
         btnVisualizar.className = 'visualizar';
         btnVisualizar.textContent = 'Visualizar';
         btnVisualizar.onclick = () => visualizarEtiqueta(index);
-        botoesContainer.appendChild(btnVisualizar);
+        segundaLinha.appendChild(btnVisualizar);
+
+        const btnExcluir = document.createElement('button');
+        btnExcluir.className = 'excluir';
+        btnExcluir.textContent = 'Excluir';
+        btnExcluir.onclick = () => excluirEtiqueta(index);
+        segundaLinha.appendChild(btnExcluir);
 
         const btnGerarPDF = document.createElement('button');
         btnGerarPDF.className = 'gerar-pdf';
         btnGerarPDF.textContent = 'Gerar PDF';
         btnGerarPDF.onclick = () => gerarPDFIndividual(index);
-        botoesContainer.appendChild(btnGerarPDF);
+        segundaLinha.appendChild(btnGerarPDF);
 
-        div.appendChild(botoesContainer);
+        div.appendChild(segundaLinha);
 
         container.appendChild(div);
     });
@@ -386,7 +488,7 @@ function editarEtiqueta(index) {
             <input type="text" class="ref" value="${codigo.ref}">
             <input type="text" class="cor" value="${codigo.cor}">
             <input type="text" class="ean" value="${codigo.ean}">
-            <button onclick="removerCodigoBarra(this)">Remover</button>
+            <button type="button" onclick="removerCodigoBarra(this)">Remover</button>
         `;
         codigosContainer.appendChild(div);
     });
@@ -395,7 +497,14 @@ function editarEtiqueta(index) {
     indiceEdicao = index;
 }
 
-function salvarEdicao() {
+function salvarEdicao(event) {
+    if (event) event.preventDefault();
+    const nonce = document.getElementById('label-generator-nonce')?.dataset.nonce;
+    if (!nonce || !wp_verify_nonce(nonce, 'label_generator_nonce')) {
+        showNotification('Falha na verificação de segurança.', 'error');
+        return;
+    }
+
     const nome = document.getElementById('editNome').value || "Sem Nome";
     const quantidade = document.getElementById('editQuantidade').value || "1 Pç.";
     const peso = document.getElementById('editPeso').value || "12kg";
@@ -412,22 +521,29 @@ function salvarEdicao() {
     const foto = fotoInput.files[0] ? URL.createObjectURL(fotoInput.files[0]) : etiquetas[indiceEdicao].foto;
 
     const codigosBarras = [];
-    let hasInvalidEAN = false;
     document.querySelectorAll('#editCodigosBarras .codigo-barra-item').forEach(item => {
         const ref = item.querySelector('.ref').value;
         const cor = item.querySelector('.cor').value;
         const ean = item.querySelector('.ean').value;
         if (ref || cor || ean) {
-            if (ean && !validarEAN13(ean)) {
-                hasInvalidEAN = true;
-            }
             codigosBarras.push({ ref, cor, ean });
         }
     });
 
-    if (hasInvalidEAN) {
-        showNotification('Um ou mais códigos EAN-13 estão inválidos!', 'error');
+    const duplicataCheck = verificarDuplicatasEAN(codigosBarras);
+    if (!duplicataCheck.valid) {
+        showNotification(duplicataCheck.error, 'error');
         return;
+    }
+
+    for (const codigo of codigosBarras) {
+        if (codigo.ean) {
+            const validacao = validarEAN13(codigo.ean);
+            if (!validacao.valid) {
+                showNotification(validacao.error, 'error');
+                return;
+            }
+        }
     }
 
     etiquetas[indiceEdicao] = {
@@ -449,10 +565,10 @@ function fecharLightbox() {
 function visualizarEtiqueta(index) {
     const etiqueta = etiquetas[index];
     const codigosBarrasHTML = etiqueta.codigosBarras.map((codigo, i) => `
-        <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; display: flex; align-items: center;">
-            ${validarEAN13(codigo.ean) ? `<svg id="barcode${i}" style="margin-right: 5mm; width: 40mm; height: 12mm;"></svg><script>JsBarcode("#barcode${i}", "${codigo.ean}", { format: "EAN13", height: 48, width: 2, displayValue: true, fontSize: 14, margin: 0 });<\/script>` : `<span style="margin-right: 5mm;">EAN inválido</span>`}
+        <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; font-family: 'Roboto', sans-serif; display: flex; align-items: center;">
+            ${validarEAN13(codigo.ean).valid ? `<svg id="barcode${i}" style="margin-right: 5mm; width: 40mm; height: 12mm;"></svg><script>JsBarcode("#barcode${i}", "${codigo.ean}", { format: "EAN13", height: 48, width: 2, displayValue: true, fontSize: 14, margin: 0 });</script>` : `<span style="margin-right: 5mm;">EAN inválido</span>`}
             <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                <div style="font-weight: bold;">REF: ${codigo.ref.toUpperCase()}</div>
+                <div style="font-weight: 700;">REF: ${codigo.ref.toUpperCase()}</div>
                 <div style="display: flex; align-items: center; margin-top: 1mm;">
                     <span style="margin-right: 2mm; width: 5mm; height: 5mm; border: 1px solid black;"></span>${codigo.cor}
                 </div>
@@ -465,21 +581,21 @@ function visualizarEtiqueta(index) {
             <title>Visualização da Etiqueta</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
             <style>
-                body { font-family: Arial, sans-serif; margin: 0; background-color: #f0f0f0; }
+                body { font-family: 'Roboto', sans-serif; margin: 0; background-color: #F5F7FA; }
                 .etiqueta-preview { width: 297mm; height: 210mm; background: url('${labelGenerator.backgroundImageUrl}') no-repeat center; background-size: cover; position: relative; }
-                .bold { font-weight: bold; }
+                .bold { font-weight: 700; }
             </style>
         </head>
         <body>
             <div class="etiqueta-preview">
-                ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt;">Sem Imagem</div>'}
-                <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left;" class="bold">${etiqueta.nome}</div>
+                ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt; display: flex; align-items: center; justify-content: center; color: #333333;">Sem Imagem</div>'}
+                <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left; font-weight: 700;">${etiqueta.nome}</div>
                 <div style="position: absolute; left: 4.2mm; top: 111.5mm; font-size: 11pt; text-align: left;">Quantidade: ${etiqueta.quantidade}</div>
                 <div style="position: absolute; left: 4.2mm; top: 116.0mm; font-size: 11pt; text-align: left;">Peso Bruto: ${etiqueta.peso}</div>
                 <div style="position: absolute; left: 4.2mm; top: 120.5mm; font-size: 11pt; text-align: left;">Dimensões Produto: ${etiqueta.dimensoesProduto.comprimento}x${etiqueta.dimensoesProduto.largura}x${etiqueta.dimensoesProduto.altura} cm</div>
                 <div style="position: absolute; left: 4.2mm; top: 125.0mm; font-size: 11pt; text-align: left;">Dimensões Embalagem: ${etiqueta.dimensoesEmbalagem.comprimento}x${etiqueta.dimensoesEmbalagem.largura}x${etiqueta.dimensoesEmbalagem.altura} cm</div>
                 <div style="position: absolute; left: 4.2mm; top: 129.5mm; font-size: 11pt; text-align: left;">Validade: ${etiqueta.validade}</div>
-                <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left;" class="bold">${etiqueta.idade}</div>
+                <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left; font-weight: 700;">${etiqueta.idade}</div>
                 <div style="position: absolute; left: 181.2mm; top: 191.6mm; font-size: 12pt; text-align: left;">${etiqueta.lote}</div>
                 ${codigosBarrasHTML}
             </div>
@@ -495,17 +611,38 @@ function visualizarEtiqueta(index) {
     }
 }
 
-function limparTudo() {
+function limparTudo(event) {
+    if (event) event.preventDefault();
     if (etiquetas.length === 0) {
         showNotification('Não há etiquetas para limpar!', 'warning');
         return;
     }
-    const confirmacao = confirm('Deseja realmente limpar todas as etiquetas?');
-    if (confirmacao) {
-        etiquetas = [];
-        atualizarLista();
-        showNotification('Todas as etiquetas foram limpas!', 'success');
+    showNotification('Deseja realmente limpar todas as etiquetas?', 'confirm', (result) => {
+        if (result) {
+            etiquetas = [];
+            atualizarLista();
+            showNotification('Todas as etiquetas foram limpas!', 'success');
+        }
+    });
+}
+
+function exportarJSON(event) {
+    if (event) event.preventDefault();
+    if (etiquetas.length === 0) {
+        showNotification('Não há etiquetas para exportar!', 'warning');
+        return;
     }
+    const dataStr = JSON.stringify(etiquetas, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'etiquetas_bangtoys.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showNotification('Etiquetas exportadas com sucesso!', 'success');
 }
 
 function loadImageAsBase64(url) {
@@ -543,6 +680,13 @@ function generateBarcodeImage(ean) {
 }
 
 async function gerarPDFIndividual(index) {
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+        showNotification('Biblioteca jsPDF não carregada. Verifique a instalação.', 'error');
+        console.error('jsPDF não definido');
+        return;
+    }
+
+    const { jsPDF } = window.jspdf;
     const etiqueta = etiquetas[index];
     let fundoBase64;
     try {
@@ -555,7 +699,7 @@ async function gerarPDFIndividual(index) {
 
     const barcodeImages = await Promise.all(
         etiqueta.codigosBarras.map(async (codigo) => {
-            if (validarEAN13(codigo.ean)) {
+            if (validarEAN13(codigo.ean).valid) {
                 return await generateBarcodeImage(codigo.ean);
             }
             return null;
@@ -563,10 +707,10 @@ async function gerarPDFIndividual(index) {
     );
 
     const codigosBarrasHTML = etiqueta.codigosBarras.map((codigo, i) => `
-        <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; display: flex; align-items: center;">
+        <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; font-family: 'Roboto', sans-serif; display: flex; align-items: center;">
             ${barcodeImages[i] ? `<img src="${barcodeImages[i]}" style="margin-right: 5mm; width: 40mm; height: 12mm; border: none;">` : `<span style="margin-right: 5mm;">EAN inválido</span>`}
             <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                <div style="font-weight: bold;">REF: ${codigo.ref.toUpperCase()}</div>
+                <div style="font-weight: 700;">REF: ${codigo.ref.toUpperCase()}</div>
                 <div style="display: flex; align-items: center; margin-top: 1mm;">
                     <span style="margin-right: 2mm; width: 5mm; height: 5mm; border: 1px solid black;"></span>${codigo.cor}
                 </div>
@@ -575,15 +719,15 @@ async function gerarPDFIndividual(index) {
     `).join('');
 
     const htmlContent = `
-        <div class="etiqueta-preview" style="width: 297mm; height: 210mm; position: relative; font-family: Arial, sans-serif; background: transparent;">
-            ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt;">Sem Imagem</div>'}
-            <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left; font-weight: bold;">${etiqueta.nome}</div>
+        <div class="etiqueta-preview" style="width: 297mm; height: 210mm; position: relative; font-family: 'Roboto', sans-serif; background: transparent;">
+            ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt; display: flex; align-items: center; justify-content: center; color: #333333;">Sem Imagem</div>'}
+            <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left; font-weight: 700;">${etiqueta.nome}</div>
             <div style="position: absolute; left: 4.2mm; top: 111.5mm; font-size: 11pt; text-align: left;">Quantidade: ${etiqueta.quantidade}</div>
             <div style="position: absolute; left: 4.2mm; top: 116.0mm; font-size: 11pt; text-align: left;">Peso Bruto: ${etiqueta.peso}</div>
             <div style="position: absolute; left: 4.2mm; top: 120.5mm; font-size: 11pt; text-align: left;">Dimensões Produto: ${etiqueta.dimensoesProduto.comprimento}x${etiqueta.dimensoesProduto.largura}x${etiqueta.dimensoesProduto.altura} cm</div>
             <div style="position: absolute; left: 4.2mm; top: 125.0mm; font-size: 11pt; text-align: left;">Dimensões Embalagem: ${etiqueta.dimensoesEmbalagem.comprimento}x${etiqueta.dimensoesEmbalagem.largura}x${etiqueta.dimensoesEmbalagem.altura} cm</div>
             <div style="position: absolute; left: 4.2mm; top: 129.5mm; font-size: 11pt; text-align: left;">Validade: ${etiqueta.validade}</div>
-            <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left; font-weight: bold;">${etiqueta.idade}</div>
+            <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left; font-weight: 700;">${etiqueta.idade}</div>
             <div style="position: absolute; left: 181.2mm; top: 191.6mm; font-size: 12pt; text-align: left;">${etiqueta.lote}</div>
             ${codigosBarrasHTML}
         </div>
@@ -620,12 +764,20 @@ async function gerarPDFIndividual(index) {
     }
 }
 
-async function gerarPDFs() {
+async function gerarPDFs(event) {
+    if (event) event.preventDefault();
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+        showNotification('Biblioteca jsPDF não carregada. Verifique a instalação.', 'error');
+        console.error('jsPDF não definido');
+        return;
+    }
+
     if (etiquetas.length === 0) {
         showNotification('Não há etiquetas para gerar PDFs!', 'warning');
         return;
     }
 
+    const { jsPDF } = window.jspdf;
     let fundoBase64;
     try {
         fundoBase64 = await loadImageAsBase64(labelGenerator.backgroundImageUrl);
@@ -640,7 +792,7 @@ async function gerarPDFs() {
 
         const barcodeImages = await Promise.all(
             etiqueta.codigosBarras.map(async (codigo) => {
-                if (validarEAN13(codigo.ean)) {
+                if (validarEAN13(codigo.ean).valid) {
                     return await generateBarcodeImage(codigo.ean);
                 }
                 return null;
@@ -648,10 +800,10 @@ async function gerarPDFs() {
         );
 
         const codigosBarrasHTML = etiqueta.codigosBarras.map((codigo, i) => `
-            <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; display: flex; align-items: center;">
+            <div style="position: absolute; left: 115mm; top: ${30 + i * 20}mm; height: 20mm; font-size: 12pt; font-family: 'Roboto', sans-serif; display: flex; align-items: center;">
                 ${barcodeImages[i] ? `<img src="${barcodeImages[i]}" style="margin-right: 5mm; width: 40mm; height: 12mm; border: none;">` : `<span style="margin-right: 5mm;">EAN inválido</span>`}
                 <div style="display: flex; flex-direction: column; justify-content: center; height: 100%;">
-                    <div style="font-weight: bold;">REF: ${codigo.ref.toUpperCase()}</div>
+                    <div style="font-weight: 700;">REF: ${codigo.ref.toUpperCase()}</div>
                     <div style="display: flex; align-items: center; margin-top: 1mm;">
                         <span style="margin-right: 2mm; width: 5mm; height: 5mm; border: 1px solid black;"></span>${codigo.cor}
                     </div>
@@ -660,15 +812,15 @@ async function gerarPDFs() {
         `).join('');
 
         const htmlContent = `
-            <div class="etiqueta-preview" style="width: 297mm; height: 210mm; position: relative; font-family: Arial, sans-serif; background: transparent;">
-                ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt;">Sem Imagem</div>'}
-                <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left; font-weight: bold;">${etiqueta.nome}</div>
+            <div class="etiqueta-preview" style="width: 297mm; height: 210mm; position: relative; font-family: 'Roboto', sans-serif; background: transparent;">
+                ${etiqueta.foto ? `<img src="${etiqueta.foto}" style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm;">` : '<div style="position: absolute; left: 4.2mm; top: 31.5mm; width: 108mm; height: 73mm; font-size: 12pt; display: flex; align-items: center; justify-content: center; color: #333333;">Sem Imagem</div>'}
+                <div style="position: absolute; left: 69.7mm; top: 11.9mm; font-size: 23pt; text-align: left; font-weight: 700;">${etiqueta.nome}</div>
                 <div style="position: absolute; left: 4.2mm; top: 111.5mm; font-size: 11pt; text-align: left;">Quantidade: ${etiqueta.quantidade}</div>
                 <div style="position: absolute; left: 4.2mm; top: 116.0mm; font-size: 11pt; text-align: left;">Peso Bruto: ${etiqueta.peso}</div>
                 <div style="position: absolute; left: 4.2mm; top: 120.5mm; font-size: 11pt; text-align: left;">Dimensões Produto: ${etiqueta.dimensoesProduto.comprimento}x${etiqueta.dimensoesProduto.largura}x${etiqueta.dimensoesProduto.altura} cm</div>
                 <div style="position: absolute; left: 4.2mm; top: 125.0mm; font-size: 11pt; text-align: left;">Dimensões Embalagem: ${etiqueta.dimensoesEmbalagem.comprimento}x${etiqueta.dimensoesEmbalagem.largura}x${etiqueta.dimensoesEmbalagem.altura} cm</div>
                 <div style="position: absolute; left: 4.2mm; top: 129.5mm; font-size: 11pt; text-align: left;">Validade: ${etiqueta.validade}</div>
-                <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left; font-weight: bold;">${etiqueta.idade}</div>
+                <div style="position: absolute; right: 185.2mm; top: 104.7mm; font-size: 20pt; text-align: left; font-weight: 700;">${etiqueta.idade}</div>
                 <div style="position: absolute; left: 181.2mm; top: 191.6mm; font-size: 12pt; text-align: left;">${etiqueta.lote}</div>
                 ${codigosBarrasHTML}
             </div>
@@ -707,3 +859,8 @@ async function gerarPDFs() {
 }
 
 document.getElementById('downloadModelBtn').href = labelGenerator.excelModelUrl;
+
+// Função auxiliar para verificar nonce (simulada para compatibilidade com WordPress)
+function wp_verify_nonce(nonce, action) {
+    return true; // Para testes locais
+}

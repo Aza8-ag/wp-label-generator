@@ -15,9 +15,15 @@ if (!defined('ABSPATH')) {
 define('LABEL_GENERATOR_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('LABEL_GENERATOR_PLUGIN_URL', plugin_dir_url(__FILE__));
 
+// Incluir funções administrativas
+if (is_admin()) {
+    require_once LABEL_GENERATOR_PLUGIN_DIR . 'includes/admin/admin-functions.php';
+}
+
 // Enfileirar scripts e estilos
 function label_generator_enqueue_scripts() {
-    if (is_page('gerador-de-etiquetas')) {
+    $slug = get_option('label_generator_page_slug', 'gerador-de-etiquetas');
+    if (is_page($slug)) {
         // Estilos
         wp_enqueue_style('label-generator-styles', LABEL_GENERATOR_PLUGIN_URL . 'assets/css/styles.css', [], '1.3');
 
@@ -30,10 +36,11 @@ function label_generator_enqueue_scripts() {
         // Script principal
         wp_enqueue_script('label-generator-script', LABEL_GENERATOR_PLUGIN_URL . 'assets/js/script.js', ['html2canvas', 'jspdf', 'jsbarcode', 'xlsx'], '1.3', true);
 
-        // Passar URLs
+        // Passar URLs e nonce
         wp_localize_script('label-generator-script', 'labelGenerator', [
             'backgroundImageUrl' => LABEL_GENERATOR_PLUGIN_URL . 'assets/images/fundo_etiqueta.jpg',
             'excelModelUrl' => LABEL_GENERATOR_PLUGIN_URL . 'models/modelo_etiquetas.xlsx',
+            'nonce' => wp_create_nonce('label_generator_nonce')
         ]);
     }
 }
@@ -41,23 +48,25 @@ add_action('wp_enqueue_scripts', 'label_generator_enqueue_scripts');
 
 // Criar shortcode para exibir o gerador de etiquetas
 function label_generator_shortcode() {
+    // Verificar permissões
+    $permission = get_option('label_generator_permission', 'edit_posts');
+    if (!current_user_can($permission)) {
+        return '<p>' . esc_html__('Você não tem permissão para acessar esta ferramenta.', 'wp-label-generator') . '</p>';
+    }
+
+    // Verificar nonce
+    $nonce = wp_create_nonce('label_generator_nonce');
     ob_start();
+    ?>
+    <div id="label-generator-nonce" data-nonce="<?php echo esc_attr($nonce); ?>"></div>
+    <?php
     include LABEL_GENERATOR_PLUGIN_DIR . 'templates/label-generator-template.php';
     return ob_get_clean();
 }
 add_shortcode('label_generator', 'label_generator_shortcode');
 
-// Criar página automaticamente ao ativar o plugin
-function label_generator_create_page() {
-    if (!get_page_by_path('gerador-de-etiquetas')) {
-        $page = array(
-            'post_title'   => 'Gerador de Etiquetas',
-            'post_content' => '[label_generator]',
-            'post_status'  => 'publish',
-            'post_type'    => 'page',
-            'post_name'    => 'gerador-de-etiquetas',
-        );
-        wp_insert_post($page);
-    }
+// Carregar traduções
+function label_generator_load_textdomain() {
+    load_plugin_textdomain('wp-label-generator', false, dirname(plugin_basename(__FILE__)) . '/languages');
 }
-register_activation_hook(__FILE__, 'label_generator_create_page');
+add_action('plugins_loaded', 'label_generator_load_textdomain');
